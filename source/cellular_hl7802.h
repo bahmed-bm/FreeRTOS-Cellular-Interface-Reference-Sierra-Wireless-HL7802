@@ -41,7 +41,7 @@
 
 /* Delay after AT+CFUN=1,1 commands. */
 #ifndef CELLULAR_HL7802_RESET_DELAY_MS
-    #define CELLULAR_HL7802_RESET_DELAY_MS    ( 3000U )
+    #define CELLULAR_HL7802_RESET_DELAY_MS    ( 15000U ) //TODO: bahmed - changed from 3000 to 15000, to allow the modem to fully be ready, otherwise the AT parser seems to crash with URC messages!
 #endif
 
 /* AT command recommended timeout value for HL7802. Reference HL7802 AT Commands
@@ -72,12 +72,12 @@
 /* Band configuration for HL7802. */
 #ifndef CELLULAR_CONFIG_HL7802_CATM1_BAND
     /* Default enable all bands. */
-    #define CELLULAR_CONFIG_HL7802_CATM1_BAND    "0002000000000F0F1B9F"
+    #define CELLULAR_CONFIG_HL7802_CATM1_BAND    "000000000000000000080A" //<-HL7810 bands //"0002000000000F0F1B9F" TODO: bahmed fix it for 7810 properly
 #endif
 
 #ifndef CELLULAR_CONFIG_HL7802_NBIOT_BAND
     /* Default enable all bands. */
-    #define CELLULAR_CONFIG_HL7802_NBIOT_BAND    "0002000000000B0F189F"
+    #define CELLULAR_CONFIG_HL7802_NBIOT_BAND    "000000000000000000080A" //<-HL7810 bands //"0002000000000B0F189F" TODO: bahmed fix it for 7810 properly
 #endif
 
 /*-----------------------------------------------------------*/

@@ -36,7 +36,7 @@
 /*-----------------------------------------------------------*/
 
 #define ENBABLE_MODULE_UE_RETRY_COUNT    ( 6U )
-#define HL7802_MAX_BAND_CFG              ( 21U )
+#define HL7802_MAX_BAND_CFG              ( 23U ) // including the null termination
 #define HL7802_KSELACQ_CMD_MAX_SIZE      ( 19U ) /* The length of AT+KSELACQ=0,1,2,3\0. */
 
 /*-----------------------------------------------------------*/
