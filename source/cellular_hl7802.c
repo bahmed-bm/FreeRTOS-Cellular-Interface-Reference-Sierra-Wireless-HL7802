@@ -36,7 +36,7 @@
 /*-----------------------------------------------------------*/
 
 #define ENBABLE_MODULE_UE_RETRY_COUNT    ( 6U )
-#define HL7802_MAX_BAND_CFG              ( 23U ) // including the null termination
+#define HL7802_MAX_BAND_CFG              ( 64U ) // including the null termination (increased for HL781x)
 #define HL7802_KSELACQ_CMD_MAX_SIZE      ( 19U ) /* The length of AT+KSELACQ=0,1,2,3\0. */
 
 /*-----------------------------------------------------------*/
@@ -46,7 +46,10 @@ typedef struct Hl7802BandConfig
     char catm1BandCfg[ HL7802_MAX_BAND_CFG ];
     char nbiotBandCfg[ HL7802_MAX_BAND_CFG ];
     char gsmBandCfg[ HL7802_MAX_BAND_CFG ];
+    char nbiotNTNBandCfg[HL7802_MAX_BAND_CFG];
 } Hl7802BandConfig_t;
+
+
 
 /*-----------------------------------------------------------*/
 
@@ -176,6 +179,9 @@ static CellularPktStatus_t recvFuncGetBandCfg( CellularContext_t * pContext,
                         pRatBand = pBandCfg->gsmBandCfg;
                         break;
 
+                    case '3': //NB-IoT-NTN
+                        pRatBand = pBandCfg->nbiotNTNBandCfg;
+                        break;
                     default:
                         pRatBand = NULL;
                         LogError( ( "recvFuncGetBandCfg: unknown RAT %s", pToken ) );
@@ -365,6 +371,7 @@ CellularError_t Cellular_ModuleEnableUE( CellularContext_t * pContext )
             }
         #endif
 
+
         /* Set Radio Access Technology. */
         if( cellularStatus == CELLULAR_SUCCESS )
         {
@@ -379,6 +386,7 @@ CellularError_t Cellular_ModuleEnableUE( CellularContext_t * pContext )
         }
 
         /* Set Default Radio Access Technology. */
+        bool isResetRequired = false;
         if( cellularStatus == CELLULAR_SUCCESS )
         {
             retAppendRat = appendRatList( ratSelectCmd, CELLULAR_CONFIG_DEFAULT_RAT );
@@ -405,7 +413,7 @@ CellularError_t Cellular_ModuleEnableUE( CellularContext_t * pContext )
         {
             cellularStatus = getBandCfg( pContext, &bandCfg );
         }
-
+#if(COMET_CHECK_BAND)        
         if( cellularStatus == CELLULAR_SUCCESS )
         {
             if( strcmp( bandCfg.catm1BandCfg, CELLULAR_CONFIG_HL7802_CATM1_BAND ) != 0 )
@@ -416,6 +424,8 @@ CellularError_t Cellular_ModuleEnableUE( CellularContext_t * pContext )
                 pktStatus = _Cellular_TimeoutAtcmdRequestWithCallback( pContext, atReqGetNoResult,
                                                                        CELLULAR_HL7802_AT_TIMEOUT_2_SECONDS_MS );
                 cellularStatus = _Cellular_TranslatePktStatus( pktStatus );
+                isResetRequired = true;
+                
             }
         }
 
@@ -429,9 +439,11 @@ CellularError_t Cellular_ModuleEnableUE( CellularContext_t * pContext )
                 pktStatus = _Cellular_TimeoutAtcmdRequestWithCallback( pContext, atReqGetNoResult,
                                                                        CELLULAR_HL7802_AT_TIMEOUT_2_SECONDS_MS );
                 cellularStatus = _Cellular_TranslatePktStatus( pktStatus );
+                isResetRequired = true;
+
             }
         }
-
+#endif
         /* Disable standalone sleep mode. */
         if( cellularStatus == CELLULAR_SUCCESS )
         {
@@ -442,12 +454,15 @@ CellularError_t Cellular_ModuleEnableUE( CellularContext_t * pContext )
         }
 
         /* Force initialization of radio to consider new configured bands. */
-        if( cellularStatus == CELLULAR_SUCCESS )
+        if(isResetRequired)
         {
-            atReqGetNoResult.pAtCmd = "AT+CFUN=1,1";
-            pktStatus = _Cellular_TimeoutAtcmdRequestWithCallback( pContext, atReqGetNoResult,
-                                                                   CELLULAR_HL7802_AT_TIMEOUT_30_SECONDS_MS );
-            cellularStatus = _Cellular_TranslatePktStatus( pktStatus );
+            if( cellularStatus == CELLULAR_SUCCESS )
+            {
+                atReqGetNoResult.pAtCmd = "AT+CFUN=1,1";
+                pktStatus = _Cellular_TimeoutAtcmdRequestWithCallback( pContext, atReqGetNoResult,
+                                                                    CELLULAR_HL7802_AT_TIMEOUT_30_SECONDS_MS );
+                cellularStatus = _Cellular_TranslatePktStatus( pktStatus );
+            }
         }
 
         /* Disable echo after reboot device. */
