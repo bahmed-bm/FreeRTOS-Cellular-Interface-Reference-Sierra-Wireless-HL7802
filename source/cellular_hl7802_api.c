@@ -2723,3 +2723,111 @@ CellularError_t Cellular_Init( CellularHandle_t * pCellularHandle,
 }
 
 /*-----------------------------------------------------------*/
+
+/*-----------------------------------------------------------*/
+
+static CellularPktStatus_t _Cellular_RecvFuncGetInternalTemperature( CellularContext_t * pContext,
+                                                            const CellularATCommandResponse_t * pAtResp,
+                                                            void * pData,
+                                                            uint16_t dataLen )
+{
+    char * pInputLine = NULL;
+    CellularSignalInfo_t * pSignalInfo = ( CellularSignalInfo_t * ) pData;
+    bool parseStatus = true;
+    CellularPktStatus_t pktStatus = CELLULAR_PKT_STATUS_OK;
+    CellularATError_t atCoreStatus = CELLULAR_AT_SUCCESS;
+
+    if( pContext == NULL )
+    {
+        LogError( ( "GetSignalInfo: Invalid handle" ) );
+        pktStatus = CELLULAR_PKT_STATUS_INVALID_HANDLE;
+    }
+    else if( ( pSignalInfo == NULL ) || ( dataLen != sizeof( CellularSignalInfo_t ) ) )
+    {
+        LogError( ( "GetSignalInfo: Invalid param" ) );
+        pktStatus = CELLULAR_PKT_STATUS_BAD_PARAM;
+    }
+    else if( ( pAtResp == NULL ) || ( pAtResp->pItm == NULL ) || ( pAtResp->pItm->pLine == NULL ) )
+    {
+        LogError( ( "GetSignalInfo: Input Line passed is NULL" ) );
+        pktStatus = CELLULAR_PKT_STATUS_FAILURE;
+    }
+    else
+    {
+        pInputLine = pAtResp->pItm->pLine;
+        atCoreStatus = Cellular_ATRemovePrefix( &pInputLine );
+
+        if( atCoreStatus == CELLULAR_AT_SUCCESS )
+        {
+            atCoreStatus = Cellular_ATRemoveAllWhiteSpaces( pInputLine );
+        }
+
+        if( atCoreStatus == CELLULAR_AT_SUCCESS )
+        {
+            parseStatus = _parseSignalQuality( pInputLine, pSignalInfo );
+        }
+
+        if( parseStatus != true )
+        {
+            pSignalInfo->rssi = CELLULAR_INVALID_SIGNAL_VALUE;
+            pSignalInfo->rsrp = CELLULAR_INVALID_SIGNAL_VALUE;
+            pSignalInfo->rsrq = CELLULAR_INVALID_SIGNAL_VALUE;
+            pSignalInfo->ber = CELLULAR_INVALID_SIGNAL_VALUE;
+            pSignalInfo->bars = CELLULAR_INVALID_SIGNAL_BAR_VALUE;
+            pktStatus = CELLULAR_PKT_STATUS_FAILURE;
+        }
+    }
+
+    return pktStatus;
+}
+
+/*-----------------------------------------------------------*/
+CellularError_t Cellular_GetInternalTemperature( CellularHandle_t cellularHandle,
+                                        int32_t * tempDegC )
+{
+    CellularContext_t * pContext = ( CellularContext_t * ) cellularHandle;
+    CellularError_t cellularStatus = CELLULAR_SUCCESS;
+    CellularPktStatus_t pktStatus = CELLULAR_PKT_STATUS_OK;
+    CellularRat_t rat = CELLULAR_RAT_INVALID;
+    CellularAtReq_t atReqTemperature =
+    {
+        "AT+KADC=2,3",
+        CELLULAR_AT_WITH_PREFIX,
+        "+KADC",
+        _Cellular_RecvFuncGetInternalTemperature,
+        tempDegC,
+        sizeof( int32_t ),
+    };
+
+    cellularStatus = _Cellular_CheckLibraryStatus( pContext );
+
+    if( cellularStatus != CELLULAR_SUCCESS )
+    {
+        LogDebug( ( "_Cellular_CheckLibraryStatus failed" ) );
+    }
+    else if( tempDegC == NULL )
+    {
+        LogDebug( ( "Cellular_GetInternalTemperature : Bad parameter" ) );
+        cellularStatus = CELLULAR_BAD_PARAMETER;
+    }
+
+
+    if( cellularStatus == CELLULAR_SUCCESS )
+    {
+        *tempDegC = CELLULAR_INVALID_SIGNAL_VALUE;
+
+        pktStatus = _Cellular_TimeoutAtcmdRequestWithCallback( pContext, atReqTemperature,
+                                                               CELLULAR_HL7802_AT_TIMEOUT_2_SECONDS_MS );
+
+        if( pktStatus == CELLULAR_PKT_STATUS_OK )
+        {
+            /* If the convert failed, the API will return CELLULAR_INVALID_SIGNAL_BAR_VALUE in bars field. */
+           // ( void ) _Cellular_ComputeSignalBars( rat, atReqTemperature );
+        }
+
+        cellularStatus = _Cellular_TranslatePktStatus( pktStatus );
+    }
+
+    return cellularStatus;
+}
+/*-----------------------------------------------------------*/
