@@ -32,7 +32,7 @@
 #include "cellular_common.h"
 #include "cellular_common_portable.h"
 #include "cellular_hl7802.h"
-
+#include "cellular_api.h"
 /*-----------------------------------------------------------*/
 
 #define ENBABLE_MODULE_UE_RETRY_COUNT    ( 6U )
@@ -585,4 +585,78 @@ uint32_t _Cellular_GetSessionId( CellularContext_t * pContext,
     }
 
     return sessionId;
+}
+
+
+static void _parseKTCPCFGResponse(CellularATCommandResponse_t *pAtResp, void *pData)
+{
+    if (pAtResp == NULL || pData == NULL || pAtResp->pItm == NULL)
+    {
+        return;
+    }
+
+    int *connId = (int *)pData;
+    char *pLine = pAtResp->pItm->pLine;
+
+    if (sscanf(pLine, "+KTCPCFG: %d", connId) == 1)
+    {
+        LogInfo(("Parsed connection ID: %d", *connId));
+    }
+}
+
+CellularError_t Cellular_ConnectTransparentTCP(CellularHandle_t cellularHandle,
+                                               const char *apn,
+                                               const char *host,
+                                               uint16_t port)
+{
+    CellularError_t cellularStatus;
+    char cmdBuf[128];
+    int connId = -1;
+
+    if (cellularHandle == NULL || apn == NULL || host == NULL || port == 0)
+    {
+        return CELLULAR_BAD_PARAMETER;
+    }
+
+    // 1. Set PDP context
+    snprintf(cmdBuf, sizeof(cmdBuf), "AT+CGDCONT=1,\"IP\",\"%s\"", apn);
+    cellularStatus = Cellular_ATCommandRaw(cellularHandle,
+                                           "AT+CGDCONT",
+                                           cmdBuf,
+                                           CELLULAR_AT_WITH_PREFIX,
+                                           NULL, NULL, 0);
+    if (cellularStatus != CELLULAR_SUCCESS) return cellularStatus;
+
+    // 2. Attach to network
+    cellularStatus = Cellular_ATCommandRaw(cellularHandle,
+                                           "AT+CGATT",
+                                           "AT+CGATT=1",
+                                           CELLULAR_AT_NO_RESULT,
+                                           NULL, NULL, 0);
+    if (cellularStatus != CELLULAR_SUCCESS) return cellularStatus;
+
+    // 3. Configure TCP connection in transparent mode
+    snprintf(cmdBuf, sizeof(cmdBuf), "AT+KTCPCFG=,0,\"%s\",%u", host, port);
+    cellularStatus = Cellular_ATCommandRaw(cellularHandle,
+                                           "AT+KTCPCFG",
+                                           cmdBuf,
+                                           CELLULAR_AT_WITH_PREFIX,
+                                           _parseKTCPCFGResponse, // You need to implement this
+                                           &connId,
+                                           sizeof(connId));
+    if (cellularStatus != CELLULAR_SUCCESS || connId < 0) return CELLULAR_INTERNAL_FAILURE;
+
+    // 4. Start TCP connection
+    snprintf(cmdBuf, sizeof(cmdBuf), "AT+KTCPSTART=%d", connId);
+    cellularStatus = Cellular_ATCommandRaw(cellularHandle,
+                                           "AT+KTCPSTART",
+                                           cmdBuf,
+                                           CELLULAR_AT_NO_RESULT,
+                                           NULL, NULL, 0);
+    if (cellularStatus != CELLULAR_SUCCESS) return cellularStatus;
+
+    // 5. Wait for CONNECT URC (handled asynchronously)
+    // You may need to wait for a semaphore or event from the URC handler
+
+    return CELLULAR_SUCCESS;
 }
