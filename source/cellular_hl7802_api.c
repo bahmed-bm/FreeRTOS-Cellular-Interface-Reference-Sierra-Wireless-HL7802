@@ -42,6 +42,15 @@
 /* Cellular module includes. */
 #include "cellular_hl7802.h"
 
+
+CellularPdnConfig_t m_pdnConfig = {
+    .apnName = "",
+    .username = "",
+    .password = "",
+    .pdnAuthType = CELLULAR_PDN_AUTH_NONE,
+    .pdnContextType = CELLULAR_PDN_CONTEXT_IPV4V6
+};
+
 /*-----------------------------------------------------------*/
 
 #define CELLULAR_AT_CMD_TYPICAL_MAX_SIZE              ( 32U )
@@ -324,6 +333,16 @@ static CellularError_t _Cellular_GetSocketStat( CellularHandle_t cellularHandle,
                                                 CellularSocketHandle_t socketHandle,
                                                 socketStat_t * pSocketStat )
 {
+    if(socketHandle->socketType != CELLULAR_SOCKET_PROTOCOL_TCP )
+    {
+        // for UDP sockets, return success with default values
+        pSocketStat->status = TCP_SOCKET_STATE_CONNECTION_UP;
+        pSocketStat->tcpNotif = TCP_NOTIF_OK;
+        pSocketStat->remData = 0;
+        pSocketStat->rcvData = 0;
+        return CELLULAR_SUCCESS;
+    }
+
     CellularContext_t * pContext = ( CellularContext_t * ) cellularHandle;
     char cmdBuf[ CELLULAR_AT_CMD_TYPICAL_MAX_SIZE ] = { '\0' };
     CellularAtReq_t atReqSocketStat =
@@ -521,7 +540,7 @@ static CellularError_t buildSocketConfig( CellularSocketHandle_t socketHandle,
         LogDebug( ( "buildSocketConfig: Invalid command buffer" ) );
         cellularStatus = CELLULAR_BAD_PARAMETER;
     }
-    else if( socketHandle->socketProtocol != CELLULAR_SOCKET_PROTOCOL_TCP )
+    else if( (socketHandle->socketProtocol != CELLULAR_SOCKET_PROTOCOL_TCP) && (socketHandle->socketProtocol != CELLULAR_SOCKET_PROTOCOL_UDP) )
     {
         LogError( ( "buildSocketConfig: socket protocol unsupported %d",
                     socketHandle->socketProtocol ) );
@@ -541,11 +560,24 @@ static CellularError_t buildSocketConfig( CellularSocketHandle_t socketHandle,
         /* The return value of snprintf is not used.
          * The max length of the string is fixed and checked offline.
          * Reserve buffer for port setting. */
-        ( void ) snprintf( pCmdBuf, CELLULAR_AT_CMD_MAX_SIZE - sizeof( portBuf ),
-                           "AT+KTCPCFG=%u,0,\"%s\",%u",
+        if(socketHandle->socketProtocol == CELLULAR_SOCKET_PROTOCOL_UDP)
+        {
+            //AT+KUDPCFG=1,0,0,0,"test.telog.com",4020
+               ( void ) snprintf( pCmdBuf, CELLULAR_AT_CMD_MAX_SIZE - sizeof( portBuf ),
+                           "AT+KUDPCFG=%u,0,0,0,\"%s\",%u",   // first 0 is the mode (0:client, 1:server, 3: secure client), second 0 is the local port (0: auto assign), third 0 is the data mode
                            socketHandle->contextId,
                            socketHandle->remoteSocketAddress.ipAddress.ipAddress,
                            socketHandle->remoteSocketAddress.port );
+        }
+        else
+        {
+                ( void ) snprintf( pCmdBuf, CELLULAR_AT_CMD_MAX_SIZE - sizeof( portBuf ),
+                           "%s=%u,0,\"%s\",%u", "AT+KTCPCFG",
+                           socketHandle->contextId,
+                           socketHandle->remoteSocketAddress.ipAddress.ipAddress,
+                           socketHandle->remoteSocketAddress.port );
+        }
+    
 
         /* Set the local port in the end of command buffer string if localPort is not 0. */
         if( socketHandle->localPort > 0 )
@@ -685,7 +717,7 @@ static CellularError_t _Cellular_getTcpCfgSessionId( CellularHandle_t cellularHa
     {
         cmdBuf,
         CELLULAR_AT_WITH_PREFIX,
-        "+KTCPCFG",
+        (socketHandle->socketType == CELLULAR_SOCKET_PROTOCOL_TCP) ? "+KTCPCFG" : "+KUDPCFG",
         _Cellular_RecvFuncGetTcpCfgSessionId,
         pSessionId,
         sizeof( uint8_t ),
@@ -1361,15 +1393,22 @@ CellularError_t Cellular_SocketRecv( CellularHandle_t cellularHandle,
     if( cellularStatus == CELLULAR_SUCCESS )
     {
         /* Calculate the read length. */
-        cellularStatus = _Cellular_GetSocketStat( cellularHandle, socketHandle, &socketStat );
-
-        if( cellularStatus == CELLULAR_SUCCESS )
+        if(socketHandle->socketType == CELLULAR_SOCKET_PROTOCOL_UDP )
         {
-            socktCmdDataLength = socketStat.rcvData;
+            socktCmdDataLength = bufferLength; //For UDP, read as much as possible (if available)
         }
         else
         {
-            socktCmdDataLength = 0;
+            cellularStatus = _Cellular_GetSocketStat( cellularHandle, socketHandle, &socketStat );
+
+            if( cellularStatus == CELLULAR_SUCCESS )
+            {
+                socktCmdDataLength = socketStat.rcvData;
+            }
+            else
+            {
+                socktCmdDataLength = 0;
+            }
         }
 
         /* Update recvLen to maximum module length. */
@@ -1398,7 +1437,7 @@ CellularError_t Cellular_SocketRecv( CellularHandle_t cellularHandle,
             /* The return value of snprintf is not used.
              * The max length of the string is fixed and checked offline. */
             ( void ) snprintf( cmdBuf, CELLULAR_AT_CMD_TYPICAL_MAX_SIZE,
-                               "%s%u,%u", "AT+KTCPRCV=", sessionId, recvLen );
+                               "%s%u,%u", ((socketHandle->socketProtocol == CELLULAR_SOCKET_PROTOCOL_UDP ) ? "AT+KUDPRCV=" : "AT+KTCPRCV=") , sessionId, recvLen );
             pktStatus = _Cellular_TimeoutAtcmdDataRecvRequestWithCallback( pContext,
                                                                            atReqSocketRecv, recvTimeout, socketRecvDataPrefix, &socktCmdDataLength );
 
@@ -1507,8 +1546,16 @@ CellularError_t Cellular_SocketSend( CellularHandle_t cellularHandle,
 
         /* The return value of snprintf is not used.
          * The max length of the string is fixed and checked offline. */
-        ( void ) snprintf( cmdBuf, CELLULAR_AT_CMD_TYPICAL_MAX_SIZE, "%s%u,%u",
-                           "AT+KTCPSND=", sessionId, atDataReqSocketSend.dataLen );
+        if(socketHandle->socketProtocol == CELLULAR_SOCKET_PROTOCOL_UDP )
+        {
+            ( void ) snprintf( cmdBuf, CELLULAR_AT_CMD_TYPICAL_MAX_SIZE, "AT+KUDPSND=%u,,,%u",
+                sessionId, atDataReqSocketSend.dataLen );
+        }
+        else
+        {
+            ( void ) snprintf( cmdBuf, CELLULAR_AT_CMD_TYPICAL_MAX_SIZE, "AT+KTCPSND=%u,%u",
+                           sessionId,  atDataReqSocketSend.dataLen );
+        }
 
         pktStatus = _Cellular_TimeoutAtcmdDataSendSuccessToken( pContext, atReqSocketSend, atDataReqSocketSend,
                                                                 CELLULAR_HL7802_AT_TIMEOUT_60_SECONDS_MS, sendTimeout,
@@ -1595,7 +1642,7 @@ CellularError_t Cellular_SocketClose( CellularHandle_t cellularHandle,
         if( socketHandle->socketState == SOCKETSTATE_CONNECTED )
         {
             ( void ) snprintf( cmdBuf, CELLULAR_AT_CMD_TYPICAL_MAX_SIZE, "%s%lu,1",
-                               "AT+KTCPCLOSE=", sessionId );
+                               ((socketHandle->socketProtocol == CELLULAR_SOCKET_PROTOCOL_UDP ) ? "AT+KUDPCLOSE=" : "AT+KTCPCLOSE="), sessionId );
             pktStatus = _Cellular_TimeoutAtcmdRequestWithCallback( pContext, atReqSocketClose,
                                                                    CELLULAR_HL7802_AT_TIMEOUT_60_SECONDS_MS );
 
@@ -1611,7 +1658,7 @@ CellularError_t Cellular_SocketClose( CellularHandle_t cellularHandle,
             ( socketHandle->socketState == SOCKETSTATE_DISCONNECTED ) )
         {
             ( void ) snprintf( cmdBuf, CELLULAR_AT_CMD_TYPICAL_MAX_SIZE, "%s%lu",
-                               "AT+KTCPDEL=", sessionId );
+                               ((socketHandle->socketProtocol == CELLULAR_SOCKET_PROTOCOL_UDP ) ? "AT+KUDPDEL=" : "AT+KTCPDEL="), sessionId );
             pktStatus = _Cellular_TimeoutAtcmdRequestWithCallback( pContext, atReqSocketClose,
                                                                    CELLULAR_HL7802_AT_TIMEOUT_2_SECONDS_MS );
 
@@ -1686,6 +1733,17 @@ CellularError_t Cellular_SocketConnect( CellularHandle_t cellularHandle,
     /* Set socket config and get session id. The session id is defined by the modem. */
     if( cellularStatus == CELLULAR_SUCCESS )
     {
+
+        if(socketHandle->socketProtocol == CELLULAR_SOCKET_PROTOCOL_UDP )
+        {                        
+            sessionId=1; // bahmed: to be fixed properly later
+            if(Cellular_SetPdnConfig(pContext, sessionId, &m_pdnConfig) != CELLULAR_SUCCESS)
+            {
+                LogError( ( "Cellular_SocketConnect: Failed to set PDN config for UDP socket." ) );
+                cellularStatus = CELLULAR_MODEM_NOT_READY;
+                return cellularStatus;
+            }
+        }        
         /* Builds the Socket connect command. */
         cellularStatus = _Cellular_getTcpCfgSessionId( pContext, socketHandle, &sessionId );
 
@@ -1699,6 +1757,13 @@ CellularError_t Cellular_SocketConnect( CellularHandle_t cellularHandle,
     /* Start the tcp connection. */
     if( cellularStatus == CELLULAR_SUCCESS )
     {
+
+        if(socketHandle->socketProtocol == CELLULAR_SOCKET_PROTOCOL_UDP)
+        {
+            socketHandle->socketState = SOCKETSTATE_CONNECTED;
+            return cellularStatus;
+        }
+
         /* Set the socket state to connecting state. If cellular modem returns error,
          * revert the state to allocated state. */
         socketHandle->socketState = SOCKETSTATE_CONNECTING;
@@ -2831,3 +2896,171 @@ CellularError_t Cellular_GetInternalTemperature( CellularHandle_t cellularHandle
     return cellularStatus;
 }
 /*-----------------------------------------------------------*/
+
+CellularError_t Cellular_ConnectTransparentTCP(CellularHandle_t cellularHandle,
+                                               const char *apn,
+                                               const char *host,
+                                               uint16_t port)
+{
+    CellularContext_t * pContext = ( CellularContext_t * ) cellularHandle;
+    CellularError_t cellularStatus = CELLULAR_SUCCESS;
+    CellularPktStatus_t pktStatus = CELLULAR_PKT_STATUS_OK;
+    char cmdBuf[128];
+    int connId = -1;
+
+    CellularAtReq_t atReqKTCPSTART =
+    {
+        cmdBuf,
+        CELLULAR_AT_NO_RESULT,
+        NULL,
+        NULL,
+        NULL,
+        0,
+    };
+
+    CellularAtDataReq_t atDataReqSocketSend =
+    {
+        NULL,
+        0,
+        0,
+        NULL,
+        0
+    };
+
+    if (cellularHandle == NULL || apn == NULL || host == NULL || port == 0)
+    {
+        return CELLULAR_BAD_PARAMETER;
+    }
+
+    // 1. Set PDP context
+   // snprintf(cmdBuf, sizeof(cmdBuf), "AT+CGDCONT=1,\"IP\",\"%s\"", apn);
+   // cellularStatus = Cellular_ATCommandRaw(cellularHandle,
+   //                                        "AT+CGDCONT",
+    //                                       cmdBuf,
+    //                                       CELLULAR_AT_WITH_PREFIX,
+     //                                      NULL, NULL, 0);
+    //if (cellularStatus != CELLULAR_SUCCESS) return cellularStatus;
+
+    // 2. Attach to network
+   // cellularStatus = Cellular_ATCommandRaw(cellularHandle,
+   //                                        "AT+CGATT",
+   //                                        "AT+CGATT=1",
+   //                                        CELLULAR_AT_NO_RESULT,
+    //                                       NULL, NULL, 0);
+    //if (cellularStatus != CELLULAR_SUCCESS) return cellularStatus;
+
+    connId = 1; // Use connection ID 1 for TCP
+    // 3. Configure TCP connection in transparent mode
+    snprintf(cmdBuf, sizeof(cmdBuf), "AT+KTCPCFG=%d,0,\"%s\",%u", connId,host, port);
+    
+    cellularStatus = Cellular_ATCommandRaw(cellularHandle,
+                                           "AT+KTCPCFG",
+                                           cmdBuf,
+                                           CELLULAR_AT_NO_RESULT,
+                                           NULL, NULL, 0);
+    if (cellularStatus != CELLULAR_SUCCESS || connId < 0) return CELLULAR_INTERNAL_FAILURE;
+
+    // 4. Start TCP connection
+    snprintf(cmdBuf, sizeof(cmdBuf), "AT+KTCPSTART=%d", connId);
+
+
+    pktStatus = _Cellular_TimeoutAtcmdDataSendSuccessToken( pContext, atReqKTCPSTART, atDataReqSocketSend,
+                                                                CELLULAR_HL7802_AT_TIMEOUT_60_SECONDS_MS, 0,
+                                                                _socketSendSuccesTokenTable, _socketSendSuccesTokenTableLength );
+
+    if( pktStatus != CELLULAR_PKT_STATUS_OK )
+    {
+
+            LogError( ( "Cellular_ConnectTransparentTCP: Failed to start TCP connection." ) );
+            cellularStatus = _Cellular_TranslatePktStatus( pktStatus );
+    }
+
+    // 5. Wait for CONNECT URC (handled asynchronously)
+    // You may need to wait for a semaphore or event from the URC handler
+
+    return CELLULAR_SUCCESS;
+}
+
+CellularError_t Cellular_ConnectTransparentUDP_not_tested(CellularHandle_t cellularHandle,
+                                               const char *apn,
+                                               const char *host,
+                                               uint16_t port)
+{
+    CellularContext_t * pContext = ( CellularContext_t * ) cellularHandle;
+    CellularError_t cellularStatus = CELLULAR_SUCCESS;
+    CellularPktStatus_t pktStatus = CELLULAR_PKT_STATUS_OK;
+    char cmdBuf[128];
+    int connId = -1;
+
+    CellularAtReq_t atReqKTCPSTART =
+    {
+        cmdBuf,
+        CELLULAR_AT_NO_RESULT,
+        NULL,
+        NULL,
+        NULL,
+        0,
+    };
+
+    CellularAtDataReq_t atDataReqSocketSend =
+    {
+        NULL,
+        0,
+        0,
+        NULL,
+        0
+    };
+
+    if (cellularHandle == NULL || apn == NULL || host == NULL || port == 0)
+    {
+        return CELLULAR_BAD_PARAMETER;
+    }
+
+    // 1. Set PDP context
+   // snprintf(cmdBuf, sizeof(cmdBuf), "AT+CGDCONT=1,\"IP\",\"%s\"", apn);
+   // cellularStatus = Cellular_ATCommandRaw(cellularHandle,
+   //                                        "AT+CGDCONT",
+    //                                       cmdBuf,
+    //                                       CELLULAR_AT_WITH_PREFIX,
+     //                                      NULL, NULL, 0);
+    //if (cellularStatus != CELLULAR_SUCCESS) return cellularStatus;
+
+    // 2. Attach to network
+   // cellularStatus = Cellular_ATCommandRaw(cellularHandle,
+   //                                        "AT+CGATT",
+   //                                        "AT+CGATT=1",
+   //                                        CELLULAR_AT_NO_RESULT,
+    //                                       NULL, NULL, 0);
+    //if (cellularStatus != CELLULAR_SUCCESS) return cellularStatus;
+
+    connId = 1; // Use connection ID 1 for TCP
+    // 3. Configure TCP connection in transparent mode
+    snprintf(cmdBuf, sizeof(cmdBuf), "AT+KUDPCFG=%d,0,\"%s\",%u", connId,host, port);
+    
+    cellularStatus = Cellular_ATCommandRaw(cellularHandle,
+                                           "AT+KUDPCFG",
+                                           cmdBuf,
+                                           CELLULAR_AT_NO_RESULT,
+                                           NULL, NULL, 0);
+    if (cellularStatus != CELLULAR_SUCCESS || connId < 0) return CELLULAR_INTERNAL_FAILURE;
+
+    // 4. Start TCP connection
+    snprintf(cmdBuf, sizeof(cmdBuf), "AT+KUDPSTART=%d", connId);
+
+
+    pktStatus = _Cellular_TimeoutAtcmdDataSendSuccessToken( pContext, atReqKTCPSTART, atDataReqSocketSend,
+                                                                CELLULAR_HL7802_AT_TIMEOUT_60_SECONDS_MS, 0,
+                                                                _socketSendSuccesTokenTable, _socketSendSuccesTokenTableLength );
+
+    if( pktStatus != CELLULAR_PKT_STATUS_OK )
+    {
+
+            LogError( ( "Cellular_ConnectTransparentTCP: Failed to start TCP connection." ) );
+            cellularStatus = _Cellular_TranslatePktStatus( pktStatus );
+    }
+
+    // 5. Wait for CONNECT URC (handled asynchronously)
+    // You may need to wait for a semaphore or event from the URC handler
+
+    return CELLULAR_SUCCESS;
+}

@@ -468,10 +468,21 @@ CellularError_t Cellular_ModuleEnableUE( CellularContext_t * pContext )
         /* Disable echo after reboot device. */
         if( cellularStatus == CELLULAR_SUCCESS )
         {
-            Platform_Delay( CELLULAR_HL7802_RESET_DELAY_MS );
+            if(isResetRequired)
+            {
+                Platform_Delay( CELLULAR_HL7802_RESET_DELAY_MS );
+            }
+    
             atReqGetWoPrefix.pAtCmd = "ATE0";
-            cellularStatus = sendAtCommandWithRetryTimeout( pContext, &atReqGetWoPrefix,
+            for(int i=0; i < 5; i++) //retry to disable echo
+            {
+                cellularStatus = sendAtCommandWithRetryTimeout( pContext, &atReqGetWoPrefix,
                                                             CELLULAR_HL7802_AT_TIMEOUT_2_SECONDS_MS );
+                if(cellularStatus == CELLULAR_SUCCESS)
+                {
+                    break;
+                }
+            }
         }
     }
 
@@ -588,11 +599,14 @@ uint32_t _Cellular_GetSessionId( CellularContext_t * pContext,
 }
 
 
-static void _parseKTCPCFGResponse(CellularATCommandResponse_t *pAtResp, void *pData)
+static CellularPktStatus_t _parseKTCPCFGResponse(CellularHandle_t cellularHandle,
+                                    const CellularATCommandResponse_t * pAtResp,
+                                    void * pData,
+                                    uint16_t dataLen )
 {
     if (pAtResp == NULL || pData == NULL || pAtResp->pItm == NULL)
     {
-        return;
+        return CELLULAR_PKT_STATUS_BAD_PARAM;
     }
 
     int *connId = (int *)pData;
@@ -601,10 +615,37 @@ static void _parseKTCPCFGResponse(CellularATCommandResponse_t *pAtResp, void *pD
     if (sscanf(pLine, "+KTCPCFG: %d", connId) == 1)
     {
         LogInfo(("Parsed connection ID: %d", *connId));
+        return CELLULAR_PKT_STATUS_OK;
     }
+
+    return CELLULAR_PKT_STATUS_FAILURE;
 }
 
-CellularError_t Cellular_ConnectTransparentTCP(CellularHandle_t cellularHandle,
+static CellularPktStatus_t _parseKTCPSTARTResponse(CellularHandle_t cellularHandle,
+                                    const CellularATCommandResponse_t * pAtResp,
+                                    void * pData,
+                                    uint16_t dataLen )
+{
+    if (pAtResp == NULL || pAtResp->pItm == NULL)
+    {
+        return CELLULAR_PKT_STATUS_BAD_PARAM;
+    }
+
+    char *pLine = pAtResp->pItm->pLine;
+
+    if (strstr(pLine, "CONNECT") != NULL)
+    {
+        LogInfo(("CONNECTED!"));
+        return CELLULAR_PKT_STATUS_OK;
+    }
+
+    return CELLULAR_PKT_STATUS_FAILURE;
+}
+
+
+
+
+CellularError_t Cellular_ConnectTransparentUDP(CellularHandle_t cellularHandle,
                                                const char *apn,
                                                const char *host,
                                                uint16_t port)
