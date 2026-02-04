@@ -240,6 +240,8 @@ static CellularError_t getBandCfg( CellularContext_t * pContext,
     return cellularStatus;
 }
 
+
+
 /*-----------------------------------------------------------*/
 
 static bool appendRatList( char * pRatList,
