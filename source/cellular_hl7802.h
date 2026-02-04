@@ -119,6 +119,7 @@ typedef enum tcpConnectionFailure
     TCP_NOTIF_MAX,
 } tcpConnectionFailure_t;
 
+
 /*-----------------------------------------------------------*/
 
 uint32_t _Cellular_GetSocketId( CellularContext_t * pContext,

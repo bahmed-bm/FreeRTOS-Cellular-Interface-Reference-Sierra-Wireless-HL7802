@@ -55,6 +55,17 @@ static void _cellular_UrcProcessKtcpNotif( CellularContext_t * pContext,
 static void _cellular_UrcProcessKtcpData( CellularContext_t * pContext,
                                           char * pInputLine );
 
+static void _cellular_UrcProcessKudpInd( CellularContext_t * pContext,
+                                         char * pInputLine );
+static void handleUdpNotif( CellularSocketContext_t * pSocketData,
+                            uint8_t udpNotif,
+                            uint32_t sessionId );
+static void _cellular_UrcProcessKudpNotif( CellularContext_t * pContext,
+                                           char * pInputLine );
+static void _cellular_UrcProcessKudpData( CellularContext_t * pContext,
+                                            char * pInputLine );
+
+
 /*-----------------------------------------------------------*/
 
 /* Try to Keep this map in Alphabetical order. */
@@ -64,7 +75,10 @@ CellularAtParseTokenMap_t CellularUrcHandlerTable[] =
     { "CREG",       _Cellular_UrcProcessCreg       },
     { "KTCP_DATA",  _cellular_UrcProcessKtcpData   },         /* TCP data URC. */
     { "KTCP_IND",   _cellular_UrcProcessKtcpInd    },         /* TCP status URC. */
-    { "KTCP_NOTIF", _cellular_UrcProcessKtcpNotif  }          /* TCP connection failure. */
+    { "KTCP_NOTIF", _cellular_UrcProcessKtcpNotif  },          /* TCP connection failure. */
+    { "KUDP_DATA",  _cellular_UrcProcessKudpData   },         /* UDP data URC. */
+    { "KUDP_IND",   _cellular_UrcProcessKudpInd    },         /* UDP status URC. */
+    { "KUDP_NOTIF", _cellular_UrcProcessKudpNotif  },          /* UDP connection failure. */
 };
 
 uint32_t CellularUrcHandlerTableSize = sizeof( CellularUrcHandlerTable ) / sizeof( CellularAtParseTokenMap_t );
@@ -208,6 +222,7 @@ static void handleTcpNotif( CellularSocketContext_t * pSocketData,
             break;
     }
 }
+
 
 /*-----------------------------------------------------------*/
 
@@ -375,4 +390,112 @@ static void _cellular_UrcProcessKtcpData( CellularContext_t * pContext,
     }
 }
 
+static void _cellular_UrcProcessKudpInd( CellularContext_t * pContext,
+                                         char * pInputLine )
+{
+    _cellular_UrcProcessKtcpInd( pContext, pInputLine );
+}   
+
 /*-----------------------------------------------------------*/
+
+static void handleUdpNotif( CellularSocketContext_t * pSocketData,
+                            uint8_t udpNotif,
+                            uint32_t sessionId )
+{
+    handleTcpNotif( pSocketData, udpNotif, sessionId );
+}
+
+/*-----------------------------------------------------------*/
+
+static void _cellular_UrcProcessKudpNotif( CellularContext_t * pContext,
+                                           char * pInputLine )
+{
+   _cellular_UrcProcessKtcpNotif( pContext, pInputLine );
+}
+/*-----------------------------------------------------------*/
+
+static void _cellular_UrcProcessKudpData( CellularContext_t * pContext,
+                                            char * pInputLine )
+{
+    CellularATError_t atCoreStatus = CELLULAR_AT_SUCCESS;
+    char * pLocalInputLine = pInputLine;
+    char * pToken = NULL;
+    CellularSocketContext_t * pSocketData = NULL;
+    uint8_t sessionId = 0;
+    uint32_t socketIndex = 0;
+    int32_t tempValue = 0;
+    uint16_t udpDataSize=0;
+
+    if( ( pContext != NULL ) && ( pInputLine != NULL ) )
+    {
+        /* The inputline is in this format +KUDP_DATA: <session_id>, <bytes_received>
+         * This URC indicate amount of data received. */
+
+        /* parse the session ID. */
+        atCoreStatus = Cellular_ATGetNextTok( &pLocalInputLine, &pToken );
+
+        if( atCoreStatus == CELLULAR_AT_SUCCESS )
+        {
+            atCoreStatus = Cellular_ATStrtoi( pToken, 10, &tempValue );
+
+            if( atCoreStatus == CELLULAR_AT_SUCCESS )
+            {
+                if( ( tempValue >= MIN_TCP_SESSION_ID ) && ( tempValue <= MAX_TCP_SESSION_ID ) )
+                {
+                    sessionId = ( uint8_t ) tempValue;
+                    socketIndex = _Cellular_GetSocketId( pContext, sessionId );
+                }
+                else
+                {
+                    LogError( ( "error parsing _cellular_UrcProcessKtcpData session ID" ) );
+                    atCoreStatus = CELLULAR_AT_ERROR;
+                }
+            }
+        }
+
+                /* Parse the tcp notif. */
+        if( atCoreStatus == CELLULAR_AT_SUCCESS )
+        {
+            atCoreStatus = Cellular_ATGetNextTok( &pLocalInputLine, &pToken );
+        }
+
+        if( atCoreStatus == CELLULAR_AT_SUCCESS )
+        {
+            atCoreStatus = Cellular_ATStrtoi( pToken, 10, &tempValue );
+
+            if( atCoreStatus == CELLULAR_AT_SUCCESS )
+            {
+                udpDataSize = ( uint16_t ) tempValue;
+            }
+        }
+
+        /* Indicate the upper layer about the data reception. */
+        /* Call the callback function of this session. */
+        if( atCoreStatus == CELLULAR_AT_SUCCESS )
+        {
+            if( socketIndex == INVALID_SOCKET_INDEX )
+            {
+                LogWarn( ( "_cellular_UrcProcessKudpData : unknown session data received. "
+                           "The session %u may not be closed properly in previous execution.", sessionId ) );
+            }
+            else
+            {
+                pSocketData = _Cellular_GetSocketData( pContext, socketIndex );
+
+                if( pSocketData == NULL )
+                {
+                    LogError( ( "_cellular_UrcProcessKtcpData : invalid socket index %u", socketIndex ) );
+                }
+                else if( pSocketData->dataReadyCallback == NULL )
+                {
+                    LogDebug( ( "_cellular_UrcProcessKtcpData : Data ready callback not set!!" ) );
+                }
+                else
+                {
+                     *(uint16_t *)pSocketData->pDataReadyCallbackContext = (uint16_t)udpDataSize;
+                    pSocketData->dataReadyCallback( pSocketData, pSocketData->pDataReadyCallbackContext );
+                }
+            }
+        }
+    }    
+}
