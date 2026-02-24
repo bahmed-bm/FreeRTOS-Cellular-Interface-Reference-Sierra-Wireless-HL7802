@@ -2897,6 +2897,7 @@ CellularError_t Cellular_GetInternalTemperature( CellularHandle_t cellularHandle
 /*-----------------------------------------------------------*/
 
 CellularError_t Cellular_ConnectTransparentTCP(CellularHandle_t cellularHandle,
+                                               int contextId,
                                                const char *apn,
                                                const char *host,
                                                uint16_t port)
@@ -2947,10 +2948,9 @@ CellularError_t Cellular_ConnectTransparentTCP(CellularHandle_t cellularHandle,
    //                                        CELLULAR_AT_NO_RESULT,
     //                                       NULL, NULL, 0);
     //if (cellularStatus != CELLULAR_SUCCESS) return cellularStatus;
-
     connId = 1; // Use connection ID 1 for TCP
     // 3. Configure TCP connection in transparent mode
-    snprintf(cmdBuf, sizeof(cmdBuf), "AT+KTCPCFG=%d,0,\"%s\",%u", connId,host, port);
+    snprintf(cmdBuf, sizeof(cmdBuf), "AT+KTCPCFG=%d,0,\"%s\",%u", contextId,host, port);
     
     cellularStatus = Cellular_ATCommandRaw(cellularHandle,
                                            "AT+KTCPCFG",
