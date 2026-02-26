@@ -2718,6 +2718,77 @@ CellularError_t Cellular_SetPdnConfig( CellularHandle_t cellularHandle,
 
 /*-----------------------------------------------------------*/
 
+CellularError_t Cellular_ConfigureSleepMode( CellularContext_t * pContext,
+                                            const CellularSleepConfig_t * pSleepConfig )
+{
+    CellularError_t cellularStatus = CELLULAR_SUCCESS;
+    CellularPktStatus_t pktStatus = CELLULAR_PKT_STATUS_OK;
+    char cmdBuf[ CELLULAR_AT_CMD_MAX_SIZE ] = { '\0' };
+    CellularAtReq_t atKsleepReq =
+    {
+        cmdBuf,
+        CELLULAR_AT_NO_RESULT,
+        NULL,
+        NULL,
+        NULL,
+        0,
+    };
+
+    /* Validate input parameters */
+    if( pSleepConfig == NULL )
+    {
+        LogError( ( "Cellular_ConfigureSleepMode: Invalid sleep config parameter" ) );
+        return CELLULAR_BAD_PARAMETER;
+    }
+
+    /* Validate parameters according to AT+KSLEEP command specification */
+    if( pSleepConfig->mngt > CELLULAR_KSLEEP_MNGT_DISABLED )
+    {
+        LogError( ( "Cellular_ConfigureSleepMode: Invalid mngt parameter %d", pSleepConfig->mngt ) );
+        return CELLULAR_BAD_PARAMETER;
+    }
+    
+    if( ( pSleepConfig->mngt == CELLULAR_KSLEEP_MNGT_HW_DRIVEN || 
+          pSleepConfig->mngt == CELLULAR_KSLEEP_MNGT_STANDALONE ) && 
+        pSleepConfig->level > CELLULAR_KSLEEP_LEVEL_HIBERNATE )
+    {
+        LogError( ( "Cellular_ConfigureSleepMode: Invalid level parameter %d", pSleepConfig->level ) );
+        return CELLULAR_BAD_PARAMETER;
+    }
+    
+    if( pSleepConfig->delay > 99 )
+    {
+        LogError( ( "Cellular_ConfigureSleepMode: Invalid delay parameter %d", pSleepConfig->delay ) );
+        return CELLULAR_BAD_PARAMETER;
+    }
+
+    /* Construct AT+KSLEEP command based on parameters */
+    if( pSleepConfig->mngt == CELLULAR_KSLEEP_MNGT_DISABLED )
+    {
+        /* Sleep mode is always disabled - no level or delay parameters */
+        ( void ) snprintf( cmdBuf, CELLULAR_AT_CMD_MAX_SIZE, "AT+KSLEEP=%d",CELLULAR_KSLEEP_MNGT_DISABLED);
+    }
+    else
+    {
+        /* mngt = 0 or 1 - level is mandatory, delay is optional */
+        ( void ) snprintf( cmdBuf, CELLULAR_AT_CMD_MAX_SIZE, "AT+KSLEEP=%d,%d,%d", 
+                          pSleepConfig->mngt, pSleepConfig->level, pSleepConfig->delay );
+    }
+
+    pktStatus = _Cellular_TimeoutAtcmdRequestWithCallback( pContext, atKsleepReq,
+                                                           CELLULAR_HL7802_AT_TIMEOUT_2_SECONDS_MS );
+
+    if( pktStatus != CELLULAR_PKT_STATUS_OK )
+    {
+        LogError( ( "Cellular_ConfigureSleepMode: failed, PktRet: %d", pktStatus ) );
+        cellularStatus = _Cellular_TranslatePktStatus( pktStatus );
+    }
+
+    return cellularStatus;
+}
+
+/*-----------------------------------------------------------*/
+
 CellularError_t Cellular_SetPsmSettings( CellularHandle_t cellularHandle,
                                          const CellularPsmSettings_t * pPsmSettings )
 {
@@ -2740,25 +2811,25 @@ CellularError_t Cellular_SetPsmSettings( CellularHandle_t cellularHandle,
 
     if( cellularStatus == CELLULAR_SUCCESS )
     {
-        /* Sleep mode driven by a HW signal (DTR). Sleep level is hibernate.
-         * Can be woken up by WAKE_UP signal or T3412 timer expiration. */
+        /* Configure sleep mode based on PSM settings */
+        CellularSleepConfig_t sleepConfig;
+        
         if( pPsmSettings->mode == 1 )
         {
-            ( void ) snprintf( cmdBuf, CELLULAR_AT_CMD_MAX_SIZE, "AT+KSLEEP=0,2,30" );
+            /* Sleep mode driven by HW signal (DTR), hibernate level, 10s delay */
+            sleepConfig.mngt = CELLULAR_KSLEEP_MNGT_HW_DRIVEN;
+            sleepConfig.level = CELLULAR_KSLEEP_LEVEL_HIBERNATE;
+            sleepConfig.delay = 10;
         }
         else
         {
-            ( void ) snprintf( cmdBuf, CELLULAR_AT_CMD_MAX_SIZE, "AT+KSLEEP=2" );
+            /* Sleep mode always disabled */
+            sleepConfig.mngt = CELLULAR_KSLEEP_MNGT_DISABLED;
+            sleepConfig.level = CELLULAR_KSLEEP_LEVEL_SLEEP;  /* Ignored when disabled */
+            sleepConfig.delay = 0;
         }
-
-        pktStatus = _Cellular_TimeoutAtcmdRequestWithCallback( pContext, atKsleepReq,
-                                                               CELLULAR_HL7802_AT_TIMEOUT_2_SECONDS_MS );
-
-        if( pktStatus != CELLULAR_PKT_STATUS_OK )
-        {
-            LogError( ( "Cellular_PacketSwitchAttach: failed, PktRet: %d", pktStatus ) );
-            cellularStatus = _Cellular_TranslatePktStatus( pktStatus );
-        }
+        
+        cellularStatus = Cellular_ConfigureSleepMode( pContext, &sleepConfig );
     }
 
     return cellularStatus;
