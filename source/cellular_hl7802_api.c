@@ -3298,3 +3298,226 @@ CellularError_t Cellular_SetCarrierConfig( CellularHandle_t cellularHandle,
     return cellularStatus;
 }
 
+/*-----------------------------------------------------------*/
+
+static CellularPktStatus_t recvFuncGetBandCfg( CellularContext_t * pContext,
+                                              const CellularATCommandResponse_t * pAtResp,
+                                              void * pData,
+                                              uint16_t dataLen )
+{
+    CellularPktStatus_t pktStatus = CELLULAR_PKT_STATUS_OK;
+    CellularATCommandLine_t * pCommnadItem = NULL;
+    char * pInputLine = NULL;
+    Hl78xxBandConfig_t * pBandCfg = NULL;
+    CellularATError_t atCoreStatus = CELLULAR_AT_SUCCESS;
+    int32_t ratValue = 0;
+    char * pToken = NULL;
+
+    if( pContext == NULL )
+    {
+        pktStatus = CELLULAR_PKT_STATUS_INVALID_HANDLE;
+        LogError( ( "recvFuncGetBandCfg: Context is null" ) );
+    }
+    else if( ( pAtResp == NULL ) || ( pAtResp->pItm == NULL ) )
+    {
+        pktStatus = CELLULAR_PKT_STATUS_BAD_PARAM;
+        LogError( ( "recvFuncGetBandCfg: Response is invalid" ) );
+    }
+    else if( ( pData == NULL ) || ( dataLen != sizeof( Hl78xxBandConfig_t ) ) )
+    {
+        pktStatus = CELLULAR_PKT_STATUS_BAD_PARAM;
+        LogError( ( "recvFuncGetBandCfg: Data is invalid" ) );
+    }
+    else
+    {
+        pBandCfg = ( Hl78xxBandConfig_t * ) pData;
+        pCommnadItem = pAtResp->pItm;
+
+        /* Parse each line of the response */
+        while( ( pCommnadItem != NULL ) && ( pBandCfg->count < 4 ) )
+        {
+            pInputLine = pCommnadItem->pLine;
+            LogDebug( ( "recvFuncGetBandCfg: input line %s", pInputLine ) );
+
+            /* Remove the line prefix "+KBNDCFG: " */
+            atCoreStatus = Cellular_ATRemovePrefix( &pInputLine );
+
+            if( atCoreStatus == CELLULAR_AT_SUCCESS )
+            {
+                atCoreStatus = Cellular_ATRemoveLeadingWhiteSpaces( &pInputLine );
+            }
+
+            /* Parse RAT value */
+            if( atCoreStatus == CELLULAR_AT_SUCCESS )
+            {
+                atCoreStatus = Cellular_ATGetNextTok( &pInputLine, &pToken );
+            }
+
+            if( atCoreStatus == CELLULAR_AT_SUCCESS )
+            {
+                atCoreStatus = Cellular_ATStrtoi( pToken, 10, &ratValue );
+            }
+
+            /* Parse band bitmap */
+            if( atCoreStatus == CELLULAR_AT_SUCCESS )
+            {
+                atCoreStatus = Cellular_ATGetNextTok( &pInputLine, &pToken );
+            }
+
+            if( atCoreStatus == CELLULAR_AT_SUCCESS )
+            {
+                /* Store the parsed values */
+                pBandCfg->entries[pBandCfg->count].rat = (Hl78xxRatId_t)ratValue;
+                
+                /* Copy band bitmap, ensuring it fits in buffer */
+                size_t tokenLen = strlen(pToken);
+                if( tokenLen < sizeof(pBandCfg->entries[pBandCfg->count].bandBitmap) )
+                {
+                    strncpy( pBandCfg->entries[pBandCfg->count].bandBitmap, pToken, 
+                            sizeof(pBandCfg->entries[pBandCfg->count].bandBitmap) - 1 );
+                    pBandCfg->entries[pBandCfg->count].bandBitmap[sizeof(pBandCfg->entries[pBandCfg->count].bandBitmap) - 1] = '\0';
+                    pBandCfg->count++;
+                }
+                else
+                {
+                    LogError( ( "recvFuncGetBandCfg: Band bitmap too long: %s", pToken ) );
+                    pktStatus = CELLULAR_PKT_STATUS_BAD_RESPONSE;
+                    break;
+                }
+            }
+            else
+            {
+                LogError( ( "recvFuncGetBandCfg: Failed to parse response line: %s", pCommnadItem->pLine ) );
+                pktStatus = _Cellular_TranslateAtCoreStatus( atCoreStatus );
+                break;
+            }
+
+            pCommnadItem = pCommnadItem->pNext;
+        }
+    }
+
+    return pktStatus;
+}
+
+/*-----------------------------------------------------------*/
+
+static CellularError_t getBandCfg( CellularContext_t * pContext, Hl78xxBandConfig_t * pBandCfg )
+{
+    CellularError_t cellularStatus = CELLULAR_SUCCESS;
+    CellularPktStatus_t pktStatus = CELLULAR_PKT_STATUS_OK;
+    CellularAtReq_t atReqGetBandCfg =
+    {
+        "AT+KBNDCFG?",
+        CELLULAR_AT_MULTI_WITH_PREFIX,
+        "+KBNDCFG",
+        recvFuncGetBandCfg,
+        pBandCfg,
+        sizeof( Hl78xxBandConfig_t )
+    };
+
+    /* pContext and pBandCfg are checked in public function. */
+    ( void ) memset( pBandCfg, 0, sizeof( Hl78xxBandConfig_t ) );
+    pktStatus = _Cellular_TimeoutAtcmdRequestWithCallback( pContext, atReqGetBandCfg,
+                                                           CELLULAR_HL7802_AT_TIMEOUT_2_SECONDS_MS );
+
+    if( pktStatus != CELLULAR_PKT_STATUS_OK )
+    {
+        LogError( ( "getBandCfg: couldn't retrieve band configurations, PktRet: %d", pktStatus ) );
+        cellularStatus = _Cellular_TranslatePktStatus( pktStatus );
+    }
+
+    return cellularStatus;    
+}
+
+/*-----------------------------------------------------------*/
+
+CellularError_t Cellular_GetBandConfig( CellularHandle_t cellularHandle,
+                                       Hl78xxBandConfig_t * pBandCfg )
+{
+    CellularContext_t * pContext = ( CellularContext_t * ) cellularHandle;
+    CellularError_t cellularStatus = CELLULAR_SUCCESS;
+
+    cellularStatus = _Cellular_CheckLibraryStatus( pContext );
+
+    if( cellularStatus != CELLULAR_SUCCESS )
+    {
+        LogDebug( ( "_Cellular_CheckLibraryStatus failed" ) );
+    }
+    else if( pBandCfg == NULL )
+    {
+        LogDebug( ( "Cellular_GetBandConfig: Bad parameter" ) );
+        cellularStatus = CELLULAR_BAD_PARAMETER;
+    }
+    else
+    {
+        cellularStatus = getBandCfg( pContext, pBandCfg );
+    }
+
+    return cellularStatus;
+}
+
+/*-----------------------------------------------------------*/
+
+CellularError_t Cellular_SetBandConfig( CellularHandle_t cellularHandle,
+                                       const Hl78xxSetBandConfig_t * pBandCfg )
+{
+    CellularContext_t * pContext = ( CellularContext_t * ) cellularHandle;
+    CellularError_t cellularStatus = CELLULAR_SUCCESS;
+    CellularPktStatus_t pktStatus = CELLULAR_PKT_STATUS_OK;
+    char cmdBuf[ CELLULAR_AT_CMD_MAX_SIZE ] = { '\0' };
+    CellularAtReq_t atReqSetBandCfg =
+    {
+        cmdBuf,
+        CELLULAR_AT_NO_RESULT,
+        NULL,
+        NULL,
+        NULL,
+        0,
+    };
+
+    cellularStatus = _Cellular_CheckLibraryStatus( pContext );
+
+    if( cellularStatus != CELLULAR_SUCCESS )
+    {
+        LogDebug( ( "_Cellular_CheckLibraryStatus failed" ) );
+    }
+    else if( pBandCfg == NULL )
+    {
+        LogDebug( ( "Cellular_SetBandConfig: Bad parameter" ) );
+        cellularStatus = CELLULAR_BAD_PARAMETER;
+    }
+    else if( pBandCfg->rat >= HL78XX_RAT_MAX )
+    {
+        LogDebug( ( "Cellular_SetBandConfig: Invalid RAT ID %d", (int)pBandCfg->rat ) );
+        cellularStatus = CELLULAR_BAD_PARAMETER;
+    }
+    else if( strlen( pBandCfg->bandBitmap ) == 0 )
+    {
+        LogDebug( ( "Cellular_SetBandConfig: Empty band bitmap" ) );
+        cellularStatus = CELLULAR_BAD_PARAMETER;
+    }
+    else
+    {
+        /* Form the AT command: AT+KBNDCFG=<RAT>,<bandbitmap> */
+        ( void ) snprintf( cmdBuf, CELLULAR_AT_CMD_MAX_SIZE, "AT+KBNDCFG=%u,%s",
+                           (uint32_t)pBandCfg->rat, pBandCfg->bandBitmap );
+        LogDebug( ( "Band config setting: %s", cmdBuf ) );
+        
+        pktStatus = _Cellular_TimeoutAtcmdRequestWithCallback( pContext, atReqSetBandCfg,
+                                                               CELLULAR_HL7802_AT_TIMEOUT_30_SECONDS_MS );
+
+        if( pktStatus != CELLULAR_PKT_STATUS_OK )
+        {
+            LogError( ( "Cellular_SetBandConfig: couldn't set band configuration, PktRet: %d", pktStatus ) );
+            cellularStatus = _Cellular_TranslatePktStatus( pktStatus );
+        }
+        else
+        {
+            LogInfo( ( "Band configuration set successfully - RAT: %d, Bands: %s", 
+                      (int)pBandCfg->rat, pBandCfg->bandBitmap ) );
+        }
+    }
+
+    return cellularStatus;
+}
+
