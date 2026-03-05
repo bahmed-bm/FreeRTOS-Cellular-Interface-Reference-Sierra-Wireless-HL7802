@@ -3238,3 +3238,63 @@ CellularError_t Cellular_GetCarrierConfig(CellularHandle_t cellularHandle,
     CellularContext_t * pContext = ( CellularContext_t * ) cellularHandle;
     return getCarrierCfg(pContext,pCarrierCfg);
 }
+
+/*-----------------------------------------------------------*/
+
+CellularError_t Cellular_SetCarrierConfig( CellularHandle_t cellularHandle,
+                                           const Hl78xxCarrierConfig_t * pCarrierCfg )
+{
+    CellularContext_t * pContext = ( CellularContext_t * ) cellularHandle;
+    CellularError_t cellularStatus = CELLULAR_SUCCESS;
+    CellularPktStatus_t pktStatus = CELLULAR_PKT_STATUS_OK;
+    char cmdBuf[ CELLULAR_AT_CMD_MAX_SIZE ] = { '\0' };
+    CellularAtReq_t atReqSetCarrierCfg =
+    {
+        cmdBuf,
+        CELLULAR_AT_NO_RESULT,
+        NULL,
+        NULL,
+        NULL,
+        0,
+    };
+
+    cellularStatus = _Cellular_CheckLibraryStatus( pContext );
+
+    if( cellularStatus != CELLULAR_SUCCESS )
+    {
+        LogDebug( ( "_Cellular_CheckLibraryStatus failed" ) );
+    }
+    else if( pCarrierCfg == NULL )
+    {
+        LogDebug( ( "Cellular_SetCarrierConfig : Bad parameter" ) );
+        cellularStatus = CELLULAR_BAD_PARAMETER;
+    }
+    else if( pCarrierCfg->id >= CARRIER_ID_GENERIC_GLOBAL )
+    {
+        LogDebug( ( "Cellular_SetCarrierConfig : Invalid carrier ID %d", (int)pCarrierCfg->id ) );
+        cellularStatus = CELLULAR_BAD_PARAMETER;
+    }
+    else
+    {
+        /* Form the AT command. */
+        ( void ) snprintf( cmdBuf, CELLULAR_AT_CMD_MAX_SIZE, "AT+KCARRIERCFG=%u",
+                           (uint32_t)pCarrierCfg->id );
+        LogDebug( ( "Carrier config setting: %s ", cmdBuf ) );
+        
+        pktStatus = _Cellular_TimeoutAtcmdRequestWithCallback( pContext, atReqSetCarrierCfg,
+                                                               CELLULAR_HL7802_AT_TIMEOUT_30_SECONDS_MS );
+
+        if( pktStatus != CELLULAR_PKT_STATUS_OK )
+        {
+            LogError( ( "Cellular_SetCarrierConfig: couldn't set carrier configuration, PktRet: %d", pktStatus ) );
+            cellularStatus = _Cellular_TranslatePktStatus( pktStatus );
+        }
+        else
+        {
+            LogInfo( ( "Carrier configuration set successfully to ID: %d", (int)pCarrierCfg->id ) );
+        }
+    }
+
+    return cellularStatus;
+}
+
