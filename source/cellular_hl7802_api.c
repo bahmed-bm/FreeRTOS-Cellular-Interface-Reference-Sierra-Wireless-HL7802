@@ -1015,6 +1015,12 @@ static CellularPktStatus_t _Cellular_RecvFuncGetRatPriority( CellularContext_t *
         {
             for( ratIndex = 0; ratIndex < maxRatPriorityLength; ratIndex++ )
             {
+                /* Accept fewer RAT entries than maxRatPriorityLength. */
+                if( ( pInputLine == NULL ) || ( *pInputLine == '\0' ) )
+                {
+                    break;
+                }
+
                 atCoreStatus = Cellular_ATGetNextTok( &pInputLine, &pToken );
 
                 if( atCoreStatus == CELLULAR_AT_SUCCESS )
@@ -1022,7 +1028,12 @@ static CellularPktStatus_t _Cellular_RecvFuncGetRatPriority( CellularContext_t *
                     atCoreStatus = Cellular_ATRemoveLeadingWhiteSpaces( &pToken );
                 }
 
-                if( ( atCoreStatus == CELLULAR_AT_SUCCESS ) && ( strlen( pToken ) == 1 ) )
+                if( atCoreStatus != CELLULAR_AT_SUCCESS )
+                {
+                    break;
+                }
+
+                if( strlen( pToken ) == 1 )
                 {
                     pRatPriorities[ ratIndex ] = convertKselacqIndexToRat( pToken[ 0 ] );
                 }
